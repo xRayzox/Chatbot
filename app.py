@@ -15,7 +15,7 @@ from stocknews import StockNews
 # --- SIDEBAR CODE
 ticker = st.sidebar.selectbox('Select your Crypto', ["BTC-USD", "ETH-USD"])
 
-# New: Time interval selection
+# Time interval selection
 interval_options = ['1m', '2m', '5m', '15m', '30m', '60m', '1h', '1d', '5d', '1wk', '1mo', '3mo']
 selected_interval = st.sidebar.selectbox('Select Time Interval', interval_options, index=6)  # default: '1h'
 
@@ -23,7 +23,7 @@ start_date = st.sidebar.date_input('Start Date', date.today() - timedelta(days=3
 end_date = st.sidebar.date_input('End Date', date.today())
 
 # --- MAIN PAGE
-st.header('Cryptocurrency Prediction')
+st.header('Cryptocurrency Prediction with Auto Candle Insights')
 
 col1, col2 = st.columns([1, 9])
 with col1:
@@ -37,17 +37,17 @@ with col2:
 
 ticker_obj = yf.Ticker(ticker)
 
-# --- DATA FETCHING with selected interval
+# --- DATA FETCHING using the selected interval
 model_data = ticker_obj.history(interval=selected_interval, start=start_date, end=end_date)
 if model_data.empty:
     st.error("No data fetched. Please check the date range, ticker, or selected interval.")
     st.stop()
 
-# Calculate a 20-period moving average for later charting
+# Calculate a 20-period moving average for charting
 if 'Close' in model_data.columns:
     model_data['MA_20'] = model_data['Close'].rolling(window=20).mean()
 
-# Continue with your original model preparation, normalization, etc.
+# --- PREPARE DATA FOR MODELING
 target_data = model_data["Close"].values.reshape(-1, 1)
 scaler_target = MinMaxScaler()
 target_data_normalized = scaler_target.fit_transform(target_data)
@@ -84,7 +84,6 @@ def extract_window_data(input_data, target_data, window_len):
     return np.array(X), np.array(y)
 
 X, y = extract_window_data(input_data_normalized, target_data_normalized, window_len)
-
 split_index = int(split_ratio * len(X))
 X_train, X_test = X[:split_index], X[split_index:]
 y_train, y_test = y[:split_index], y[split_index:]
@@ -117,14 +116,71 @@ fig.for_each_trace(lambda t: t.update(
 fig.update_layout(legend_title="Legend")
 st.write(fig)
 
+# === AUTO CANDLE INSIGHTS FUNCTIONALITY ===
+def detect_candlestick_patterns(prev, curr):
+    """Detect common candlestick patterns between two consecutive candles."""
+    patterns = []
+    
+    # Bullish Engulfing: previous candle bearish and current candle bullish, with body engulfing.
+    if prev['Close'] < prev['Open'] and curr['Close'] > curr['Open']:
+        if curr['Open'] < prev['Close'] and curr['Close'] > prev['Open']:
+            patterns.append('Bullish Engulfing')
+    
+    # Bearish Engulfing: previous candle bullish and current candle bearish, with body engulfing.
+    if prev['Close'] > prev['Open'] and curr['Close'] < curr['Open']:
+        if curr['Open'] > prev['Close'] and curr['Close'] < prev['Open']:
+            patterns.append('Bearish Engulfing')
+    
+    # Calculate candle components for the current candle
+    body = abs(curr['Close'] - curr['Open'])
+    lower_shadow = curr['Open'] - curr['Low'] if curr['Close'] >= curr['Open'] else curr['Close'] - curr['Low']
+    upper_shadow = curr['High'] - curr['Close'] if curr['Close'] >= curr['Open'] else curr['High'] - curr['Open']
+    
+    # Hammer: small body near the top with a long lower shadow (at least twice the body) and little upper shadow.
+    if body > 0 and lower_shadow > 2 * body and upper_shadow < body:
+        patterns.append('Hammer')
+    
+    # Shooting Star: small body near the bottom with a long upper shadow (at least twice the body) and little lower shadow.
+    if body > 0 and upper_shadow > 2 * body and lower_shadow < body:
+        patterns.append('Shooting Star')
+    
+    return patterns
+
+def generate_auto_insights(df):
+    """
+    Generate auto insights by scanning the candlestick data for patterns.
+    Returns a list of strings with detected patterns and the corresponding date.
+    """
+    insights = []
+    # Ensure the DataFrame has a Date column if not, reset_index will create one.
+    df_insights = df.copy().reset_index()
+    
+    # Loop over candles starting from the second one (to compare with the previous candle)
+    for i in range(1, len(df_insights)):
+        prev = df_insights.loc[i-1]
+        curr = df_insights.loc[i]
+        patterns = detect_candlestick_patterns(prev, curr)
+        if patterns:
+            candle_date = curr['Date'] if 'Date' in curr else curr['index']
+            insight = f"On {candle_date.date() if isinstance(candle_date, pd.Timestamp) else candle_date}: " \
+                      + ", ".join(patterns) + " pattern detected."
+            insights.append(insight)
+    return insights
+
+# Generate insights from the fetched data (using raw_data from history)
+raw_data = ticker_obj.history(interval=selected_interval, start=start_date, end=end_date)
+if not raw_data.empty:
+    auto_insights = generate_auto_insights(raw_data)
+else:
+    auto_insights = ["No data available for insights."]
+
 # --- TABS FOR ADDITIONAL INFO
 tabs = st.tabs(["About", "News"])
 
 with tabs[0]:
+    st.subheader("Candlestick Chart with MA 20")
     # Candlestick chart with moving average
-    raw_data = ticker_obj.history(interval=selected_interval, start=start_date, end=end_date)
     if not raw_data.empty:
-        # Recompute MA if needed
         raw_data['MA_20'] = raw_data['Close'].rolling(window=20).mean()
         fig2 = go.Figure(data=[go.Candlestick(
             x=raw_data.index,
@@ -146,12 +202,20 @@ with tabs[0]:
             yaxis_title=f"{ticker} Price"
         )
         st.plotly_chart(fig2)
-
+        
+        st.subheader("Historical Data")
         history_data = raw_data.copy()
         history_data.index = pd.to_datetime(history_data.index).date
         history_data.index.name = "Date"
         history_data.sort_index(ascending=False, inplace=True)
         st.write(history_data)
+        
+        st.subheader("Auto Candle Insights")
+        if auto_insights:
+            for insight in auto_insights[-5:]:  # show last 5 insights
+                st.info(insight)
+        else:
+            st.info("No candlestick patterns detected in the recent data.")
     else:
         st.error("No historical data available for candlestick chart.")
 
