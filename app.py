@@ -7,7 +7,7 @@ st.title("Optimized Hugging Face Chatbot")
 # Load model with caching and GPU acceleration
 @st.cache_resource
 def load_pipeline():
-    return pipeline("text-generation", model="meta-llama/Llama-2-7b-chat-hf", 
+    return pipeline("text-generation", model="MaziyarPanahi/calme-3.2-instruct-78b", 
                     torch_dtype=torch.float16, device=0)
 
 pipe = load_pipeline()
